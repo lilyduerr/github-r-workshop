@@ -1,0 +1,243 @@
+---
+title: "Prep Primate Data"
+author: "Github R Workshop"
+date: "2026-02-07"
+output: word
+---
+
+Purpose: Validate primate_data.xlsx, flag common issues, and write a tidy CSV: data/tidy/primate_data_tidy.csv
+
+# Paths
+These are defined right here at the top so that they are easily modifiable later, if needed.
+
+```{r}
+
+# Creating our tidy data folder if needed. This is where the processed data will go.
+
+in_path  <- here("data", "raw", "primate_data.xlsx")
+out_dir  <- here("data", "tidy")
+out_path <- here("data", "tidy", "primate_data_tidy.csv")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+if (!file.exists(in_path)) {
+  rlang::abort(paste0("Input file not found: ", in_path))
+}
+
+
+```
+
+# Load raw data
+```{r}
+raw <- readxl::read_excel(in_path, sheet = 1)
+```
+
+The following code is based on common errors I come across when working with raw data. This code hunts for common errors and corrects them. For your own projects, you will need to think about this a priori and develop your own script based on the kinds of errors you encounter. Take a second to open this file in Excel and look at it. It's messy.
+
+We start by loading in a function I have premade. I like to functionalize operations that I tend to do a lot. In this case, since I work with a lot of excel sheets, I have developed some general checks I do before hand. These checks are found in /code/function_validate_sheet.R. Take a few moments to read through that file. You don't need to understand every single thing happening there but just read through the comments to see what the checks do generally and how the code is structured to be tidy-compliant.
+
+# Load in the function
+
+We load in the function first. This was done in execute_all_scripts too, but it's here in case you're just working inside this script alone.
+```{r}
+source(here::here("code", "function_validate_sheet.R"))
+```
+
+Then set parameters below. This way if we need to make changes, like say we want to adjust the numerical range it checks, we can just do it right here without risking damage to the function which is kept separate. If we want to add more tasks for the function to do, we just put them in the function and add additional parameter lines here.
+
+# Run function
+
+Now we run the function on the raw data, defining the parameters it needs.
+```{r}
+diag <- validate_sheet(
+  data = raw,
+  taxon_col = "Taxon",
+  note_col = "note",
+  duplicate_keys = c("Taxon"),
+  plausible_ranges = list(
+    cranial_length_mm = c(120, 350),
+    m1_length_mm = c(7, 25),
+    femur_length_mm = c(200, 650),
+    pelvis_width_mm = c(80, 250),
+    humerus_length_mm = c(150, 450),
+    radius_length_mm = c(150, 350)
+  )
+)
+
+diag$ok
+diag$issues
+```
+The first output we get shows that diag$ok was FALSE. In other words, "Did the diagnostic run fine?" "No, there are errors."
+
+Looking at the diagnostic results, we can see the following:
+ - negative values
+ - duplicate rows
+ - biologically implausible ranges (including some possible unit mismatches)
+ - unit flag in notes (this tells us explictly there's a unit mismatch problem)
+ 
+A note on implausible_range: in real life, we still may want to keep these outliers (they might be real data). In this exercise, we will assume they are errors.
+ 
+
+Let's clean these problems up. Now, we could have simply run the code below right at the start of this script and just fixed everything, but then we wouldn't have known what was wrong.
+
+First, while this wasn't checked by the function above, we know that our column names are a mess. Let's start there.
+
+```{r}
+tidy <- raw |>
+  # Notice that as soon as we start changing the data, we make a new object. We NEVER alter the raw data.
+  rename_with(
+    ~ .x |>
+      stringr::str_trim() |> # white space
+      stringr::str_replace_all("\\s+", "_") |> #replace spaces with _
+      stringr::str_replace_all("[^A-Za-z0-9_]", "") |> # remove anything that's not alphanumeric
+      stringr::str_replace_all("_{2,}", "_") |> #replace double _ with single _
+      stringr::str_to_upper() # make it all uppercase
+  ) |>
+  #  Map to all caps names used downstream. I prefer all caps because then I instantly know I'm looking at (1) a column and (2) a column I cleaned.
+  
+  rename( #additional fixes
+    CRANIAL_LENGTH_MM = CRANIAL_LENGTH_MM,
+    M1_LENGTH_MM      = M1_LEN_MM,
+    FEMUR_LENGTH_MM   = FEMUR_LENGTH,
+    PELVIS_WIDTH_MM   = PELVIS_WIDTH_MM,
+    HUMERUS_LENGTH_MM = HUMERUS_LENGTH_MM,
+    RADIUS_LENGTH_MM  = RADLENGTHMM,
+    TAXON             = TAXON,
+    NOTE              = NOTE
+  )
+
+# check
+names(tidy)
+```
+
+```{r}
+tidy <- tidy |>
+  mutate(
+    .ROW = row_number(),
+    NOTE = as.character(NOTE),
+    NOTE_LOWER = stringr::str_to_lower(NOTE),
+    # NOTE_LOWER is just NOTE in lower case so we can search it reliably.
+
+    # 1) Fix unit issues explicitly flagged in notes
+    HUMERUS_LENGTH_MM = case_when(
+      stringr::str_detect(NOTE_LOWER, "humerus.*cm|\\bcm\\b") ~ HUMERUS_LENGTH_MM * 10,
+      TRUE ~ HUMERUS_LENGTH_MM
+    ),
+
+    RADIUS_LENGTH_MM = case_when(
+      stringr::str_detect(NOTE_LOWER, "radius.*m|\\bm\\b") ~ RADIUS_LENGTH_MM * 1000,
+      TRUE ~ RADIUS_LENGTH_MM
+    ),
+
+    # 2) Magnitude-based unit conversion for radius (when notes are missing)
+    RADIUS_LENGTH_MM = case_when(
+      !stringr::str_detect(NOTE_LOWER, "radius.*m|\\bm\\b") &
+        !is.na(RADIUS_LENGTH_MM) &
+        RADIUS_LENGTH_MM > 0 &
+        RADIUS_LENGTH_MM < 1 ~ RADIUS_LENGTH_MM * 1000,
+      TRUE ~ RADIUS_LENGTH_MM
+    ),
+
+    # 3) Impossible values -> NA (not guessing)
+    across(
+      c(
+        CRANIAL_LENGTH_MM,
+        M1_LENGTH_MM,
+        FEMUR_LENGTH_MM,
+        PELVIS_WIDTH_MM,
+        HUMERUS_LENGTH_MM,
+        RADIUS_LENGTH_MM
+      ),
+      ~ dplyr::na_if(.x, 0)
+    ),
+
+    across(
+      c(
+        CRANIAL_LENGTH_MM,
+        M1_LENGTH_MM,
+        FEMUR_LENGTH_MM,
+        PELVIS_WIDTH_MM,
+        HUMERUS_LENGTH_MM,
+        RADIUS_LENGTH_MM
+      ),
+      ~ if_else(!is.na(.x) & .x < 0, NA_real_, .x)
+    ),
+
+    # 4) Implausible giant values -> NA (thresholds should match your validator)
+    CRANIAL_LENGTH_MM = if_else(CRANIAL_LENGTH_MM > 350, NA_real_, CRANIAL_LENGTH_MM),
+    FEMUR_LENGTH_MM = if_else(FEMUR_LENGTH_MM > 650, NA_real_, FEMUR_LENGTH_MM)
+  ) |>
+  
+  # 5) Remove exact duplicate rows (keep first occurrence)
+  distinct(across(-.ROW), .keep_all = TRUE) |>
+  arrange(TAXON) |>
+  select(-NOTE_LOWER)
+
+  # 6) Remove the .Row row, this was an internal row needed for validation, but now unnecessary
+  tidy <- tidy|>
+  dplyr::select(-.ROW)
+  
+  # 7) Rounding values because this is fake data and I feel like doing it.
+
+  tidy <- tidy |>
+   mutate(
+    across(
+      c(
+        CRANIAL_LENGTH_MM,
+        M1_LENGTH_MM,
+        FEMUR_LENGTH_MM,
+        PELVIS_WIDTH_MM,
+        HUMERUS_LENGTH_MM,
+        RADIUS_LENGTH_MM
+      ),
+      ~ round(.x, 1)
+    )
+  )
+```
+
+Now we run the diagnostic again to make sure it worked.
+```{r}
+# Re-run diagnostics on cleaned data
+
+diag_after <- validate_sheet(
+  data = tidy,
+  taxon_col = "TAXON",
+  note_col  = "NOTE",
+  id_col    = NULL,          # still no specimen ID (design issue)
+  duplicate_keys = c("TAXON"),
+  plausible_ranges = list(
+    cranial_length_mm = c(120, 350),
+    m1_length_mm      = c(7, 25),
+    femur_length_mm   = c(200, 650),
+    pelvis_width_mm   = c(80, 250),
+    humerus_length_mm = c(150, 450),
+    radius_length_mm  = c(150, 350)
+  )
+)
+
+# Overall pass/fail
+diag_after$ok
+
+
+```
+
+Our data are finally ready for analysis!
+
+Let's export it to a csv file using the paths we created at the top of this script.
+```{r}
+readr::write_csv(tidy, out_path, na = "")
+
+message("✅ Wrote tidy file: ", out_path)
+
+# This little bit will stop it if it did not pass validation. Useful when running from execute_all_scripts.
+if (diag_after$ok) {
+  readr::write_csv(tidy, out_path, na = "")
+} else {
+  stop("Data did not pass validation — tidy file not written.")
+}
+
+```
+
+Now one last thing: Write your name below. The only purpose of this is so that you actually changed some code in this script so when you try to commit it, there's something to commit. 
+
+Name: ________
+
