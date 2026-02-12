@@ -1,0 +1,113 @@
+---
+title: "Explore Primate Data"
+author: "Github R Workshop"
+date: "2026-02-10"
+output: word
+---
+
+Purpose: Explore our tidy data with basic descriptive stats.
+
+# Load in data
+```{r}
+tidy <- readr::read_csv(
+  here::here("data", "tidy", "primate_data_tidy.csv"),
+  show_col_types = FALSE
+)
+```
+
+# Run basic stats
+
+```{r}
+# Identify numeric measurement columns dynamically
+measure_cols <- tidy |>
+  dplyr::select(where(is.numeric)) |>
+  names()
+
+fmt_range <- function(min, max) {
+  paste0(round(min, 1), "–", round(max, 1))
+}
+
+# Overall counts/taxa
+n_total <- nrow(tidy)
+taxa <- tidy |> distinct(TAXON) |> pull(TAXON) |> sort()
+n_taxa <- length(taxa)
+
+# By-taxon stats table (for ALL numeric columns)
+basic_stats <- tidy |>
+  group_by(TAXON) |>
+  summarise(
+    n = n(),
+    across(
+      all_of(measure_cols),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        sd   = ~ sd(.x, na.rm = TRUE),
+        min  = ~ min(.x, na.rm = TRUE),
+        max  = ~ max(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    ),
+    .groups = "drop"
+  )
+
+# Overall stats (for ALL numeric columns)
+overall_stats <- tidy |>
+  summarise(
+    across(
+      all_of(measure_cols),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        min  = ~ min(.x, na.rm = TRUE),
+        max  = ~ max(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  )
+
+basic_stats
+```
+
+Suppose we want to take some of this information and incorporate it into the manuscript we're writing. We can write our text here and have R fill in the appropriate values. When we run this from execute_all_scripts, these values will be filled in the Word output. Then, it's ready to just copy-paste into our manuscript. 
+
+Also, when you look at the table above in the Word document, it won't look super pretty. I don't have time to get into it, but if you want pretty tables in these word outputs, look into the knitr package.
+
+
+We analyzed skeletal measurements from **`r n_total` primate specimens** representing
+**`r n_taxa` taxa** (*`r paste(taxa, collapse = ", ")`*).
+Cranial length averaged **`r round(overall_stats$CRANIAL_LENGTH_MM_mean, 1)` mm**
+(range *`r fmt_range(overall_stats$CRANIAL_LENGTH_MM_min,
+overall_stats$CRANIAL_LENGTH_MM_max)`* mm),
+while femur length averaged **`r round(overall_stats$FEMUR_LENGTH_MM_mean, 1)` mm**
+(range *`r fmt_range(overall_stats$FEMUR_LENGTH_MM_min,
+overall_stats$FEMUR_LENGTH_MM_max)`* mm).
+Limb elements showed substantial variation, with humerus lengths ranging from
+*`r fmt_range(overall_stats$HUMERUS_LENGTH_MM_min,
+overall_stats$HUMERUS_LENGTH_MM_max)`* mm and radius lengths ranging from
+*`r fmt_range(overall_stats$RADIUS_LENGTH_MM_min,
+overall_stats$RADIUS_LENGTH_MM_max)`* mm.
+Molar length (M1) exhibited comparatively lower absolute variation
+(mean **`r round(overall_stats$M1_LENGTH_MM_mean, 1)` mm**).
+
+
+
+# Export the table
+We can also output that table to our tables folder we created in execute_all_scripts. Just make sure the file name starts with explore_ so you know it didn't come from a truly necessary script later.
+
+```{r}
+# Again, we do it this way so we can easily change paths if we want. Also makes copy-paste easier when we need to reuse these lines.
+out_dir  <- here::here("documents", "tables")
+out_path <- here::here("documents", "tables", "explore_basic_stats.csv")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+readr::write_csv(basic_stats, out_path)
+
+message("✅ Wrote table: ", out_path)
+```
+
+Now one last thing: Write your name below. The only purpose of this is so that you actually changed some code in this script so when you try to commit it, there's something to commit. 
+
+Name: ________
+
+Finally, run this file from execute_all_scripts and look at the Word output in documents/rmd_documents.
+
